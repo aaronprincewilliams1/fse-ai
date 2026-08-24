@@ -136,37 +136,39 @@ export default function FSEAi() {
     setStarted(true)
     setLoading(true)
 
-    const formData = new FormData()
-    const names: string[] = []
-
-    for (const file of files) {
-      const defaultName = file.name.replace(/\.[^.]+$/, '')
-      const instrumentName = window.prompt(`Instrument name for "${file.name}"?`, defaultName)
-      if (!instrumentName) continue
-      formData.append('file', file)
-      formData.append('instrumentName', instrumentName)
-      names.push(instrumentName)
+    // If multiple files, ask for instrument name once to use as a group label
+    // If single file, ask for its specific name
+    let instrumentName = ''
+    if (files.length === 1) {
+      const defaultName = files[0].name.replace(/\.[^.]+$/, '')
+      instrumentName = window.prompt('What instrument is this manual for?', defaultName) || ''
+    } else {
+      instrumentName = window.prompt(`Uploading ${files.length} files. What instrument are these manuals for?`) || ''
     }
-
-    if (names.length === 0) { setLoading(false); return }
+    if (!instrumentName) { setLoading(false); return }
 
     try {
-      const res = await fetch('/api/upload-manual', {
-        method: 'POST',
-        body: formData
-      })
-      const data = await res.json()
-      if (data.success) {
-        const summary = data.results.map((r: any) => `• ${r.name} (${Math.round(r.characters / 1000)}k chars)`).join('\n')
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: `✅ ${data.results.length} manual${data.results.length > 1 ? 's' : ''} uploaded:\n${summary}`
-        }])
-      } else {
-        setMessages(prev => [...prev, { role: 'assistant', content: 'Error uploading manuals. Please try again.' }])
+      const results = []
+      for (const file of files) {
+        const formData = new FormData()
+        const name = files.length === 1 ? instrumentName : `${instrumentName} - ${file.name.replace(/\.[^.]+$/, '')}`
+        formData.append('file', file)
+        formData.append('instrumentName', name)
+        const res = await fetch('/api/upload-manual', {
+          method: 'POST',
+          body: formData
+        })
+        const data = await res.json()
+        if (data.success) results.push(...data.results)
       }
-    } catch {
-      setMessages(prev => [...prev, { role: 'assistant', content: 'Error uploading manuals.' }])
+      const summary = results.map((r: any) => `• ${r.name} (${Math.round(r.characters / 1000)}k chars)`).join('\n')
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `✅ ${results.length} manual${results.length > 1 ? 's' : ''} uploaded:\n${summary}`
+      }])
+    } catch (err) {
+      console.error(err)
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Error uploading manuals. Please try again.' }])
     }
     setLoading(false)
     e.target.value = ''
