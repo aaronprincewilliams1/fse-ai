@@ -131,16 +131,24 @@ export default function FSEAi() {
   }
 
   async function handleManualUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
+    const files = Array.from(e.target.files || [])
+    if (!files.length) return
     setStarted(true)
     setLoading(true)
-    const instrumentName = window.prompt('What instrument is this manual for?')
-    if (!instrumentName) { setLoading(false); return }
 
     const formData = new FormData()
-    formData.append('file', file)
-    formData.append('instrumentName', instrumentName)
+    const names: string[] = []
+
+    for (const file of files) {
+      const defaultName = file.name.replace(/\.[^.]+$/, '')
+      const instrumentName = window.prompt(`Instrument name for "${file.name}"?`, defaultName)
+      if (!instrumentName) continue
+      formData.append('file', file)
+      formData.append('instrumentName', instrumentName)
+      names.push(instrumentName)
+    }
+
+    if (names.length === 0) { setLoading(false); return }
 
     try {
       const res = await fetch('/api/upload-manual', {
@@ -149,15 +157,16 @@ export default function FSEAi() {
       })
       const data = await res.json()
       if (data.success) {
+        const summary = data.results.map((r: any) => `• ${r.name} (${Math.round(r.characters / 1000)}k chars)`).join('\n')
         setMessages(prev => [...prev, {
           role: 'assistant',
-          content: `✅ Manual for ${instrumentName} uploaded successfully (${Math.round(data.characters / 1000)}k characters extracted). I can now reference it when troubleshooting.`
+          content: `✅ ${data.results.length} manual${data.results.length > 1 ? 's' : ''} uploaded:\n${summary}`
         }])
       } else {
-        setMessages(prev => [...prev, { role: 'assistant', content: 'Error uploading manual. Please try again.' }])
+        setMessages(prev => [...prev, { role: 'assistant', content: 'Error uploading manuals. Please try again.' }])
       }
     } catch {
-      setMessages(prev => [...prev, { role: 'assistant', content: 'Error uploading manual.' }])
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Error uploading manuals.' }])
     }
     setLoading(false)
     e.target.value = ''
@@ -422,7 +431,7 @@ export default function FSEAi() {
         </div>
 
         <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
-        <input ref={fileInputRef} type="file" accept=".txt,.pdf" className="hidden" onChange={handleManualUpload} />
+        <input ref={fileInputRef} type="file" accept=".txt,.pdf,.doc,.docx" multiple className="hidden" onChange={handleManualUpload} />
         <input ref={fieldNoteImageRef} type="file" accept="image/*" className="hidden" onChange={handleFieldNoteImageUpload} />
       </div>
 
