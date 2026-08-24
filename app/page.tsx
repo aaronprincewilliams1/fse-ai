@@ -134,22 +134,32 @@ export default function FSEAi() {
     const file = e.target.files?.[0]
     if (!file) return
     setStarted(true)
+    setLoading(true)
     const instrumentName = window.prompt('What instrument is this manual for?')
-    if (!instrumentName) return
-    const reader = new FileReader()
-    reader.onload = async () => {
-      const content = reader.result as string
-      await supabase.from('manuals').insert({
-        instrument_name: instrumentName,
-        file_name: file.name,
-        content: content.slice(0, 50000)
+    if (!instrumentName) { setLoading(false); return }
+
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('instrumentName', instrumentName)
+
+    try {
+      const res = await fetch('/api/upload-manual', {
+        method: 'POST',
+        body: formData
       })
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: `✅ Manual for ${instrumentName} uploaded. I can now reference it when troubleshooting.`
-      }])
+      const data = await res.json()
+      if (data.success) {
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `✅ Manual for ${instrumentName} uploaded successfully (${Math.round(data.characters / 1000)}k characters extracted). I can now reference it when troubleshooting.`
+        }])
+      } else {
+        setMessages(prev => [...prev, { role: 'assistant', content: 'Error uploading manual. Please try again.' }])
+      }
+    } catch {
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Error uploading manual.' }])
     }
-    reader.readAsText(file)
+    setLoading(false)
     e.target.value = ''
   }
 
@@ -412,7 +422,7 @@ export default function FSEAi() {
         </div>
 
         <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
-        <input ref={fileInputRef} type="file" accept=".txt" className="hidden" onChange={handleManualUpload} />
+        <input ref={fileInputRef} type="file" accept=".txt,.pdf" className="hidden" onChange={handleManualUpload} />
         <input ref={fieldNoteImageRef} type="file" accept="image/*" className="hidden" onChange={handleFieldNoteImageUpload} />
       </div>
 
