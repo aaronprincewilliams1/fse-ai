@@ -4,6 +4,20 @@ import { useState, useRef, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { Mic, MicOff, Send, Upload, Search, X, Plus, ChevronDown, ChevronUp } from 'lucide-react'
 
+async function extractTextFromPDF(file: File): Promise<string> {
+  const pdfjsLib = await import('pdfjs-dist')
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`
+  const arrayBuffer = await file.arrayBuffer()
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+  let text = ''
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i)
+    const content = await page.getTextContent()
+    text += content.items.map((item: any) => item.str).join(' ') + '\n'
+  }
+  return text
+}
+
 interface Message {
   role: 'user' | 'assistant'
   content: string
@@ -136,39 +150,58 @@ export default function FSEAi() {
     setStarted(true)
     setLoading(true)
 
-    // If multiple files, ask for instrument name once to use as a group label
-    // If single file, ask for its specific name
-    let instrumentName = ''
-    if (files.length === 1) {
-      const defaultName = files[0].name.replace(/\.[^.]+$/, '')
-      instrumentName = window.prompt('What instrument is this manual for?', defaultName) || ''
-    } else {
-      instrumentName = window.prompt(`Uploading ${files.length} files. What instrument are these manuals for?`) || ''
-    }
+    const instrumentName = files.length === 1
+      ? window.prompt('What instrument is this manual for?', files[0].name.replace(/\.[^.]+$/, '')) || ''
+      : window.prompt(`Uploading ${files.length} files. What instrument are these manuals for?`) || ''
     if (!instrumentName) { setLoading(false); return }
 
     try {
       const results = []
       for (const file of files) {
-        const formData = new FormData()
         const name = files.length === 1 ? instrumentName : `${instrumentName} - ${file.name.replace(/\.[^.]+$/, '')}`
-        formData.append('file', file)
-        formData.append('instrumentName', name)
-        const res = await fetch('/api/upload-manual', {
-          method: 'POST',
-          body: formData
+        let extractedText = ''
+
+        if (file.name.endsWith('.pdf')) {
+          setMessages(prev => {
+            const last = prev[prev.length - 1]
+            const msg = `⏳ Extracting text from ${file.name}...`
+            if (last?.content === msg) return prev
+            return [...prev, { role: 'assistant', content: msg }]
+          })
+          extractedText = await extractTextFromPDF(file)
+        } else if (file.name.endsWith('.docx') || file.name.endsWith('.doc')) {
+          const formData = new FormData()
+          formData.append('file', file)
+          formData.append('instrumentName', name)
+          const res = await fetch('/api/upload-manual', { method: 'POST', body: formData })
+          const data = await res.json()
+          if (data.success) results.push(...data.results)
+          continue
+        } else {
+          extractedText = await file.text()
+        }
+
+        const { createClient } = await import('@supabase/supabase-js')
+        const sb = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+        )
+        await sb.from('manuals').insert({
+          instrument_name: name,
+          file_name: file.name,
+          content: extractedText.slice(0, 50000)
         })
-        const data = await res.json()
-        if (data.success) results.push(...data.results)
+        results.push({ name, characters: extractedText.length })
       }
-      const summary = results.map((r: any) => `• ${r.name} (${Math.round(r.characters / 1000)}k chars)`).join('\n')
+
+      const summary = results.map((r: any) => `• ${r.name} (${Math.round(r.characters / 1000)}k chars extracted)`).join('\n')
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: `✅ ${results.length} manual${results.length > 1 ? 's' : ''} uploaded:\n${summary}`
       }])
     } catch (err) {
       console.error(err)
-      setMessages(prev => [...prev, { role: 'assistant', content: 'Error uploading manuals. Please try again.' }])
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Error uploading manual. Please try again.' }])
     }
     setLoading(false)
     e.target.value = ''
