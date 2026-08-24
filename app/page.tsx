@@ -181,12 +181,7 @@ export default function FSEAi() {
           extractedText = await file.text()
         }
 
-        const { createClient } = await import('@supabase/supabase-js')
-        const sb = createClient(
-          process.env.NEXT_PUBLIC_SUPABASE_URL!,
-          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-        )
-        await sb.from('manuals').insert({
+        await supabase.from('manuals').insert({
           instrument_name: name,
           file_name: file.name,
           content: extractedText.slice(0, 50000)
