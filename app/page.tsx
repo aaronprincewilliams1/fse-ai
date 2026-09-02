@@ -457,14 +457,12 @@ export default function FSEAi() {
   }
 
   function renderMessageContent(text: string) {
-    const appleMapRegex = /https://maps.apple.com/?q=[^s]*/g
-    const googleMapRegex = /https://maps.google.com/?q=[^s]*/g
     const parts = text.split(/(https://maps.[^s]*)/g)
     return parts.map((part, i) => {
-      if (part.match(/https://maps.apple.com/)) {
+      if (part.includes('maps.apple.com')) {
         return <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-0.5 rounded-lg text-xs font-medium">📍 Apple Maps</a>
       }
-      if (part.match(/https://maps.google.com/)) {
+      if (part.includes('maps.google.com')) {
         return <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 bg-green-100 text-green-700 px-2 py-0.5 rounded-lg text-xs font-medium">🗺️ Google Maps</a>
       }
       return <span key={i}>{part}</span>
