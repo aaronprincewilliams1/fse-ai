@@ -31,17 +31,56 @@ export async function POST(req: NextRequest) {
     return `[${new Date(c.created_at).toLocaleDateString()}] ${site?.name || 'Unknown'} | ${c.instrument_name} | Error: ${c.error_code} | ${c.error_description} | Resolution: ${c.resolution}`
   }).join('\n')
 
-  const manualContent = (manuals.data || []).map((m: any) =>
-    `=== ${m.instrument_name} MANUAL ===\n${m.content}`
-  ).join('\n\n')
-
   const fieldNotesList = (fieldNotes.data || []).map((n: any) =>
     `[${new Date(n.created_at).toLocaleDateString()}] ${n.instrument_name || 'General'} | Error: ${n.error_code || 'N/A'} | ${n.note_text} | Tags: ${n.tags || ''}`
   ).join('\n')
 
-  const system = `You are FSE AI, a private intelligent assistant for a medical device field service engineer. You are smart, proactive, and conversational.
+  const manualList = (manuals.data || []).map((m: any) =>
+    `ID:${m.id} | ${m.instrument_name} | file:${m.file_url || 'none'} | text:${m.content?.slice(0, 1000) || 'none'}`
+  ).join('\n')
 
-CURRENT DATA:
+  const lastMessage = messages[messages.length - 1]
+  const lastContent = typeof lastMessage?.content === 'string' ? lastMessage.content : ''
+  const isTroubleshooting = /error|fault|fail|not work|issue|problem|alarm|code|E\d+/i.test(lastContent)
+
+  let apiMessages = messages.map((m: any) => ({ role: m.role, content: m.content }))
+
+  // If troubleshooting, attach relevant PDFs for visual reading
+  if (isTroubleshooting) {
+    const pdfManuals = (manuals.data || []).filter((m: any) => m.file_url)
+    if (pdfManuals.length > 0) {
+      const pdfContents: any[] = []
+      for (const manual of pdfManuals.slice(0, 2)) {
+        try {
+          const { data } = await supabase.storage.from('manuals').download(manual.file_url)
+          if (data) {
+            const buffer = Buffer.from(await data.arrayBuffer())
+            const base64 = buffer.toString('base64')
+            pdfContents.push({
+              type: 'document',
+              source: { type: 'base64', media_type: 'application/pdf', data: base64 }
+            })
+          }
+        } catch (e) {
+          console.error('PDF load error:', e)
+        }
+      }
+      if (pdfContents.length > 0) {
+        apiMessages = [
+          ...messages.slice(0, -1).map((m: any) => ({ role: m.role, content: m.content })),
+          {
+            role: 'user',
+            content: [
+              ...pdfContents,
+              { type: 'text', text: lastContent + '\n\n[Please search these PDF manuals visually for relevant error codes, tables, diagrams and troubleshooting steps. Include any images or diagrams you find relevant.]' }
+            ]
+          }
+        ]
+      }
+    }
+  }
+
+  const system = `You are FSE AI, a private intelligent assistant for a medical device field service engineer.
 
 SITES:
 ${siteList || 'No sites yet'}
@@ -49,64 +88,51 @@ ${siteList || 'No sites yet'}
 CONTACTS:
 ${contactList || 'No contacts yet'}
 
-CASE HISTORY (most recent first):
+CASE HISTORY:
 ${caseList || 'No cases yet'}
 
-FIELD NOTES (personal notes and fixes from the engineer):
+FIELD NOTES:
 ${fieldNotesList || 'No field notes yet'}
 
 MANUALS:
-${manualContent || 'No manuals uploaded yet'}
+${manualList || 'No manuals yet'}
 
----
-
-YOUR CAPABILITIES:
-
-1. SITE LOOKUP: If user mentions a location, check SITES. If found, show full profile (address, lab directions, contacts). If not found, ask for details to create it.
-
-2. NEW SITE CREATION: Extract site name + address from natural language and save it.
+CAPABILITIES:
+1. SITE LOOKUP/CREATE: Check sites, create if missing
    ACTION:CREATE_SITE:{"name":"...","address":"...","lab_location":"..."}
 
-3. NEW CONTACT: Save contact info linked to a site.
+2. CONTACT: Save contacts
    ACTION:CREATE_CONTACT:{"site_name":"...","name":"...","role":"...","phone":"...","email":"..."}
 
-4. TROUBLESHOOTING: When user describes an error or symptom:
-   - Search manuals for relevant info
-   - Check case history for past resolutions
-   - Check field notes for related personal notes
-   - Give practical steps
-   - If related field notes exist, end your response with FIELD_NOTES_AVAILABLE:[comma separated matching note IDs]
+3. TROUBLESHOOTING: Search PDFs visually + case history + field notes. Be specific and practical.
+   End with FIELD_NOTES_AVAILABLE:[id1,id2] if relevant notes exist.
 
-5. LOG A CASE: When user resolves an issue, log it.
+4. LOG CASE:
    ACTION:CREATE_CASE:{"site_name":"...","instrument_name":"...","error_code":"...","error_description":"...","resolution":"...","notes":"..."}
 
-6. SITE VISIT: If user says they are heading somewhere, pull up full site info and offer arrival email.
+5. SITE VISIT: Show address, lab directions, contacts, offer arrival email.
 
-7. EMAIL DRAFTING: Draft professional arrival or resolution emails, brief and professional.
-
-8. GENERAL: Answer anything using manuals, case history, and field notes.
-
----
+6. EMAIL: Draft professional arrival or resolution emails.
 
 RULES:
-- Be concise. Engineer is often on-site.
-- Always check field notes when troubleshooting — they contain real-world fixes.
-- Distinguish between manual info and field note info in your response.
-- Put ACTION or FIELD_NOTES_AVAILABLE tags on their own line at the END of your response.
-- When field notes are relevant, always flag them with FIELD_NOTES_AVAILABLE.`
+- Be concise and practical, engineer is on site.
+- Always check case history and field notes first.
+- When reading PDFs, describe any relevant diagrams or images you see.
+- Put ACTION tags at END of response on their own line.`
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'x-api-key': process.env.ANTHROPIC_API_KEY!,
-      'anthropic-version': '2023-06-01'
+      'anthropic-version': '2023-06-01',
+      'anthropic-beta': 'pdfs-2024-09-25'
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1024,
+      max_tokens: 2048,
       system,
-      messages
+      messages: apiMessages
     })
   })
 
@@ -116,13 +142,11 @@ RULES:
   const actions: any[] = []
   let relatedNoteIds: string[] = []
 
-  // Parse field notes flag
   const notesMatch = replyText.match(/FIELD_NOTES_AVAILABLE:\[([^\]]*)\]/)
   if (notesMatch) {
     relatedNoteIds = notesMatch[1].split(',').map((s: string) => s.trim()).filter(Boolean)
   }
 
-  // Parse and execute actions
   const actionRegex = /ACTION:(CREATE_SITE|CREATE_CONTACT|CREATE_CASE):(\{[^}]+\})/g
   let match
   while ((match = actionRegex.exec(replyText)) !== null) {
@@ -131,9 +155,7 @@ RULES:
       const payload = JSON.parse(match[2])
       if (actionType === 'CREATE_SITE') {
         const { data: newSite } = await supabase.from('sites').insert({
-          name: payload.name,
-          address: payload.address,
-          lab_location: payload.lab_location || ''
+          name: payload.name, address: payload.address, lab_location: payload.lab_location || ''
         }).select().single()
         actions.push({ type: 'SITE_CREATED', site: newSite })
       } else if (actionType === 'CREATE_CONTACT') {
@@ -141,11 +163,8 @@ RULES:
           .select('id').ilike('name', `%${payload.site_name}%`).single()
         if (siteData) {
           await supabase.from('contacts').insert({
-            site_id: siteData.id,
-            name: payload.name,
-            role: payload.role || '',
-            phone: payload.phone || '',
-            email: payload.email || ''
+            site_id: siteData.id, name: payload.name, role: payload.role || '',
+            phone: payload.phone || '', email: payload.email || ''
           })
           actions.push({ type: 'CONTACT_CREATED' })
         }
@@ -167,17 +186,12 @@ RULES:
     }
   }
 
-  // Fetch related field notes if any
   let relatedNotes: any[] = []
   if (relatedNoteIds.length > 0) {
-    const { data: notesData } = await supabase
-      .from('field_notes')
-      .select('*')
-      .in('id', relatedNoteIds)
+    const { data: notesData } = await supabase.from('field_notes').select('*').in('id', relatedNoteIds)
     relatedNotes = notesData || []
   }
 
-  // Clean tags from displayed response
   const cleanReply = replyText
     .replace(/ACTION:(CREATE_SITE|CREATE_CONTACT|CREATE_CASE):\{[^}]+\}/g, '')
     .replace(/FIELD_NOTES_AVAILABLE:\[[^\]]*\]/g, '')

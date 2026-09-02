@@ -4,20 +4,6 @@ import { useState, useRef, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { Mic, MicOff, Send, Upload, Search, X, Plus, ChevronDown, ChevronUp } from 'lucide-react'
 
-async function extractTextFromPDF(file: File): Promise<string> {
-  const pdfjsLib = await import('pdfjs-dist')
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
-  const arrayBuffer = await file.arrayBuffer()
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
-  let text = ''
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i)
-    const content = await page.getTextContent()
-    text += content.items.map((item: any) => item.str).join(' ') + '\n'
-  }
-  return text
-}
-
 interface Message {
   role: 'user' | 'assistant'
   content: string
@@ -48,22 +34,36 @@ export default function FSEAi() {
   const [listening, setListening] = useState(false)
   const [recentSites, setRecentSites] = useState<Site[]>([])
   const [started, setStarted] = useState(false)
-  const [showAddNote, setShowAddNote] = useState(false)
   const [expandedNotes, setExpandedNotes] = useState<number | null>(null)
+  const [noteListening, setNoteListening] = useState(false)
+  const [showAddNote, setShowAddNote] = useState(false)
   const [newNote, setNewNote] = useState({ instrument_name: '', error_code: '', note_text: '', tags: '' })
   const [noteImage, setNoteImage] = useState<File | null>(null)
   const [addingNote, setAddingNote] = useState(false)
+  const [viewportHeight, setViewportHeight] = useState('100dvh')
   const imageInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const fieldNoteImageRef = useRef<HTMLInputElement>(null)
   const noteImageRef = useRef<HTMLInputElement>(null)
   const recognitionRef = useRef<any>(null)
+  const noteListenRef = useRef<any>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  const noteListenRef = useRef<any>(null)
-  const [noteListening, setNoteListening] = useState(false)
 
-  useEffect(() => { loadRecentSites() }, [])
+  useEffect(() => {
+    loadRecentSites()
+
+    // Fix for mobile keyboard pushing content
+    function handleResize() {
+      if (window.visualViewport) {
+        setViewportHeight(`${window.visualViewport.height}px`)
+      }
+    }
+    window.visualViewport?.addEventListener('resize', handleResize)
+    handleResize()
+    return () => window.visualViewport?.removeEventListener('resize', handleResize)
+  }, [])
+
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
   async function loadRecentSites() {
@@ -123,7 +123,7 @@ export default function FSEAi() {
                 role: 'user',
                 content: [
                   { type: 'image', source: { type: 'base64', media_type: file.type, data: base64 } },
-                  { type: 'text', text: 'This is a photo of an error on a medical instrument. What does this error mean? Check the manuals and case history for troubleshooting steps and any past resolutions.' }
+                  { type: 'text', text: 'This is a photo of an error on a medical instrument. What does this error mean? Check the manuals and case history for troubleshooting steps and past resolutions.' }
                 ]
               }
             ]
@@ -159,40 +159,33 @@ export default function FSEAi() {
       const results = []
       for (const file of files) {
         const name = files.length === 1 ? instrumentName : `${instrumentName} - ${file.name.replace(/\.[^.]+$/, '')}`
-        let extractedText = ''
-
         if (file.name.endsWith('.pdf')) {
-          setMessages(prev => {
-            const last = prev[prev.length - 1]
-            const msg = `⏳ Extracting text from ${file.name}...`
-            if (last?.content === msg) return prev
-            return [...prev, { role: 'assistant', content: msg }]
+          setMessages(prev => [...prev, { role: 'assistant', content: `⏳ Uploading ${file.name}...` }])
+          const fileName = `${Date.now()}-${file.name}`
+          const { error: storageError } = await supabase.storage
+            .from('manuals')
+            .upload(fileName, file, { contentType: 'application/pdf' })
+          if (storageError) throw storageError
+          await supabase.from('manuals').insert({
+            instrument_name: name,
+            file_name: file.name,
+            file_url: fileName,
+            content: ''
           })
-          extractedText = await extractTextFromPDF(file)
-        } else if (file.name.endsWith('.docx') || file.name.endsWith('.doc')) {
+          results.push({ name })
+        } else {
           const formData = new FormData()
           formData.append('file', file)
           formData.append('instrumentName', name)
           const res = await fetch('/api/upload-manual', { method: 'POST', body: formData })
           const data = await res.json()
           if (data.success) results.push(...data.results)
-          continue
-        } else {
-          extractedText = await file.text()
         }
-
-        await supabase.from('manuals').insert({
-          instrument_name: name,
-          file_name: file.name,
-          content: extractedText.slice(0, 50000)
-        })
-        results.push({ name, characters: extractedText.length })
       }
-
-      const summary = results.map((r: any) => `• ${r.name} (${Math.round(r.characters / 1000)}k chars extracted)`).join('\n')
+      const summary = results.map((r: any) => `• ${r.name}`).join('\n')
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: `✅ ${results.length} manual${results.length > 1 ? 's' : ''} uploaded:\n${summary}`
+        content: `✅ ${results.length} manual${results.length > 1 ? 's' : ''} uploaded:\n${summary}\n\nI will read these PDFs visually when you ask about errors.`
       }])
     } catch (err) {
       console.error(err)
@@ -207,10 +200,9 @@ export default function FSEAi() {
     if (!file) return
     setStarted(true)
     setLoading(true)
-    const instrumentName = window.prompt('What instrument does this field note relate to?')
+    const instrumentName = window.prompt('What instrument does this field note relate to?') || ''
     const errorCode = window.prompt('Error code? (leave blank if none)') || ''
     const tags = window.prompt('Any tags? (e.g. power, reagent)') || ''
-
     const reader = new FileReader()
     reader.onload = async () => {
       const base64 = (reader.result as string).split(',')[1]
@@ -230,7 +222,7 @@ export default function FSEAi() {
         })
         const data = await res.json()
         await supabase.from('field_notes').insert({
-          instrument_name: instrumentName || '',
+          instrument_name: instrumentName,
           error_code: errorCode,
           note_text: data.reply || 'Image note',
           tags,
@@ -238,10 +230,10 @@ export default function FSEAi() {
         })
         setMessages(prev => [...prev, {
           role: 'assistant',
-          content: `✅ Field note saved from photo.\n\n📋 Extracted text:\n${data.reply}`
+          content: `✅ Field note saved.\n\n📋 Extracted:\n${data.reply}`
         }])
       } catch {
-        setMessages(prev => [...prev, { role: 'assistant', content: 'Error processing field note image.' }])
+        setMessages(prev => [...prev, { role: 'assistant', content: 'Error processing field note.' }])
       }
       setLoading(false)
     }
@@ -252,7 +244,6 @@ export default function FSEAi() {
   async function saveFieldNote() {
     if (!newNote.note_text.trim() && !noteImage) return
     setAddingNote(true)
-
     if (noteImage) {
       const reader = new FileReader()
       reader.onload = async () => {
@@ -274,6 +265,7 @@ export default function FSEAi() {
         await supabase.from('field_notes').insert({
           ...newNote,
           note_text: newNote.note_text || data.reply || 'Image note',
+          image_url: ''
         })
         setNewNote({ instrument_name: '', error_code: '', note_text: '', tags: '' })
         setNoteImage(null)
@@ -285,7 +277,6 @@ export default function FSEAi() {
       reader.readAsDataURL(noteImage)
       return
     }
-
     await supabase.from('field_notes').insert({ ...newNote, image_url: '' })
     setNewNote({ instrument_name: '', error_code: '', note_text: '', tags: '' })
     setNoteImage(null)
@@ -327,23 +318,31 @@ export default function FSEAi() {
   }
 
   return (
-    <div className="min-h-screen bg-white flex flex-col max-w-xl mx-auto px-4">
-
+    <div
+      className="bg-white flex flex-col max-w-xl mx-auto overflow-hidden"
+      style={{ height: viewportHeight }}
+    >
       {/* Header */}
-      <div className="pt-10 pb-4 flex items-center justify-between">
+      <div className="pt-6 pb-3 px-4 flex items-center justify-between shrink-0">
         <div>
           <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">FSE AI</h1>
           <p className="text-sm text-gray-400 mt-0.5">Field Service Assistant</p>
         </div>
-        
+        <button
+          onClick={() => setShowAddNote(!showAddNote)}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all"
+        >
+          <Plus size={15} />
+          Note
+        </button>
       </div>
 
       {/* Add Field Note Panel */}
       {showAddNote && (
-        <div className="border border-gray-200 rounded-2xl p-4 mb-4 space-y-3 bg-gray-50">
+        <div className="mx-4 border border-gray-200 rounded-2xl p-4 mb-2 space-y-3 bg-gray-50 shrink-0">
           <p className="text-sm font-medium text-gray-700">New Field Note</p>
           <input
-            placeholder="Instrument name (e.g. Sysmex XN)"
+            placeholder="Instrument name"
             value={newNote.instrument_name}
             onChange={e => setNewNote({ ...newNote, instrument_name: e.target.value })}
             className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-blue-400 bg-white"
@@ -356,7 +355,7 @@ export default function FSEAi() {
           />
           <div className="relative">
             <textarea
-              placeholder="Describe the fix or paste notes here..."
+              placeholder="Describe the fix..."
               value={newNote.note_text}
               onChange={e => setNewNote({ ...newNote, note_text: e.target.value })}
               className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-blue-400 bg-white resize-none"
@@ -370,7 +369,7 @@ export default function FSEAi() {
             </button>
           </div>
           <input
-            placeholder="Tags (e.g. power, reagent, error)"
+            placeholder="Tags (e.g. power, reagent)"
             value={newNote.tags}
             onChange={e => setNewNote({ ...newNote, tags: e.target.value })}
             className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-blue-400 bg-white"
@@ -386,11 +385,7 @@ export default function FSEAi() {
             <input ref={noteImageRef} type="file" accept="image/*" className="hidden" onChange={e => setNoteImage(e.target.files?.[0] || null)} />
           </div>
           <div className="flex gap-2">
-            <button
-              onClick={saveFieldNote}
-              disabled={addingNote}
-              className="bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-medium disabled:opacity-50"
-            >
+            <button onClick={saveFieldNote} disabled={addingNote} className="bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-medium disabled:opacity-50">
               {addingNote ? 'Saving...' : 'Save Note'}
             </button>
             <button onClick={() => setShowAddNote(false)} className="text-gray-400 text-sm px-3 py-2">Cancel</button>
@@ -398,121 +393,51 @@ export default function FSEAi() {
         </div>
       )}
 
-      {/* Search / Input bar */}
-      <div className="relative">
-        <div className="flex items-center gap-2 border border-gray-200 rounded-2xl px-4 py-3 shadow-sm bg-white focus-within:border-blue-400 transition-colors">
-          <Search size={16} className="text-gray-300 shrink-0" />
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input) }
-            }}
-            placeholder="Site name, error code, or ask anything..."
-            className="flex-1 text-sm text-gray-800 placeholder-gray-300 resize-none focus:outline-none bg-transparent leading-snug"
-            rows={1}
-          />
-          {input && <button onClick={() => setInput('')} className="text-gray-300 hover:text-gray-500"><X size={14} /></button>}
-        </div>
+      {/* Scrollable message area */}
+      <div className="flex-1 overflow-y-auto px-4 py-2">
+        {!started && recentSites.length > 0 && (
+          <div className="mt-4">
+            <p className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3">Recent Sites</p>
+            <div className="space-y-2">
+              {recentSites.map(site => (
+                <button
+                  key={site.id}
+                  onClick={() => sendMessage(`I'm heading to ${site.name} today`)}
+                  className="w-full text-left border border-gray-100 rounded-xl px-4 py-3 hover:border-blue-200 hover:bg-blue-50 transition-all group"
+                >
+                  <p className="text-sm font-medium text-gray-800 group-hover:text-blue-700">{site.name}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">{site.address}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
-        {/* Action buttons row */}
-        <div className="flex gap-2 mt-3 flex-wrap">
-          <button
-            onClick={() => listening ? recognitionRef.current?.stop() : startListening('chat')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium transition-all ${listening ? 'bg-red-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-          >
-            {listening ? <MicOff size={15} /> : <Mic size={15} />}
-            {listening ? 'Stop' : 'Speak'}
-          </button>
-
-          <button
-            onClick={() => imageInputRef.current?.click()}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200"
-          >
-            <Upload size={15} />
-            Photo
-          </button>
-
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200"
-          >
-            <Upload size={15} />
-            Manual
-          </button>
-
-          <button
-            onClick={() => fieldNoteImageRef.current?.click()}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200"
-          >
-            <Upload size={15} />
-            Field Note
-          </button>
-
-          <button
-            onClick={() => sendMessage(input)}
-            disabled={!input.trim() || loading}
-            className="ml-auto flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-30"
-          >
-            <Send size={15} />
-            Enter
-          </button>
-        </div>
-
-        <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
-        <input ref={fileInputRef} type="file" accept=".txt,.pdf,.doc,.docx" multiple className="hidden" onChange={handleManualUpload} />
-        <input ref={fieldNoteImageRef} type="file" accept="image/*" className="hidden" onChange={handleFieldNoteImageUpload} />
-      </div>
-
-      {/* Recent Sites */}
-      {!started && recentSites.length > 0 && (
-        <div className="mt-8">
-          <p className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3">Recent Sites</p>
-          <div className="space-y-2">
-            {recentSites.map(site => (
+        {!started && recentSites.length === 0 && (
+          <div className="mt-6 space-y-2">
+            <p className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3">Try saying...</p>
+            {[
+              "I'm heading to Cedars-Sinai today",
+              "Error E55 on the Sysmex XN",
+              "Add new site: UCLA Medical 10833 Le Conte Ave",
+              "Draft an arrival email for my next visit"
+            ].map((hint, i) => (
               <button
-                key={site.id}
-                onClick={() => sendMessage(`I'm heading to ${site.name} today`)}
-                className="w-full text-left border border-gray-100 rounded-xl px-4 py-3 hover:border-blue-200 hover:bg-blue-50 transition-all group"
+                key={i}
+                onClick={() => sendMessage(hint)}
+                className="w-full text-left px-4 py-2.5 rounded-xl border border-gray-100 text-sm text-gray-500 hover:border-blue-200 hover:text-blue-600 hover:bg-blue-50 transition-all"
               >
-                <p className="text-sm font-medium text-gray-800 group-hover:text-blue-700">{site.name}</p>
-                <p className="text-xs text-gray-400 mt-0.5">{site.address}</p>
+                {hint}
               </button>
             ))}
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Empty state hints */}
-      {!started && recentSites.length === 0 && (
-        <div className="mt-10 space-y-2">
-          <p className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3">Try saying...</p>
-          {[
-            "I'm heading to Cedars-Sinai today",
-            "Error E55 on the Sysmex XN",
-            "Add new site: UCLA Medical 10833 Le Conte Ave",
-            "Draft an arrival email for my next visit"
-          ].map((hint, i) => (
-            <button
-              key={i}
-              onClick={() => sendMessage(hint)}
-              className="w-full text-left px-4 py-2.5 rounded-xl border border-gray-100 text-sm text-gray-500 hover:border-blue-200 hover:text-blue-600 hover:bg-blue-50 transition-all"
-            >
-              {hint}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Conversation */}
-      {started && (
-        <div className="mt-6 flex-1">
-          <div className="flex justify-between items-center mb-3">
-            <p className="text-xs text-gray-400">Conversation</p>
-            <button onClick={clearChat} className="text-xs text-gray-400 hover:text-gray-600">Clear</button>
-          </div>
-          <div className="space-y-4 pb-10">
+        {started && (
+          <div className="space-y-4 py-2">
+            <div className="flex justify-end">
+              <button onClick={clearChat} className="text-xs text-gray-400 hover:text-gray-600">Clear chat</button>
+            </div>
             {messages.map((m, i) => (
               <div key={i} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
                 <div className={`max-w-xs lg:max-w-sm px-4 py-2.5 rounded-2xl text-sm whitespace-pre-wrap leading-relaxed ${
@@ -522,8 +447,6 @@ export default function FSEAi() {
                 }`}>
                   {m.content}
                 </div>
-
-                {/* Field Notes Button */}
                 {m.role === 'assistant' && m.relatedNotes && m.relatedNotes.length > 0 && (
                   <div className="mt-2 w-full max-w-xs lg:max-w-sm">
                     <button
@@ -565,8 +488,57 @@ export default function FSEAi() {
             )}
             <div ref={messagesEndRef} />
           </div>
+        )}
+      </div>
+
+      {/* Input fixed at bottom — stays above keyboard */}
+      <div className="shrink-0 px-4 pb-4 pt-2 border-t border-gray-100 bg-white">
+        <div className="flex items-center gap-2 border border-gray-200 rounded-2xl px-4 py-3 shadow-sm bg-white focus-within:border-blue-400 transition-colors">
+          <Search size={16} className="text-gray-300 shrink-0" />
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input) }
+            }}
+            placeholder="Site name, error code, or ask anything..."
+            className="flex-1 text-sm text-gray-800 placeholder-gray-300 resize-none focus:outline-none bg-transparent leading-snug"
+            rows={1}
+          />
+          {input && <button onClick={() => setInput('')} className="text-gray-300 hover:text-gray-500"><X size={14} /></button>}
         </div>
-      )}
+
+        <div className="flex gap-2 mt-2 flex-wrap">
+          <button
+            onClick={() => listening ? recognitionRef.current?.stop() : startListening('chat')}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all ${listening ? 'bg-red-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+          >
+            {listening ? <MicOff size={15} /> : <Mic size={15} />}
+            {listening ? 'Stop' : 'Speak'}
+          </button>
+          <button onClick={() => imageInputRef.current?.click()} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">
+            <Upload size={15} />Photo
+          </button>
+          <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">
+            <Upload size={15} />Manual
+          </button>
+          <button onClick={() => fieldNoteImageRef.current?.click()} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">
+            <Upload size={15} />Field Note
+          </button>
+          <button
+            onClick={() => sendMessage(input)}
+            disabled={!input.trim() || loading}
+            className="ml-auto flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-30"
+          >
+            <Send size={15} />Enter
+          </button>
+        </div>
+
+        <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+        <input ref={fileInputRef} type="file" accept=".txt,.pdf,.doc,.docx" multiple className="hidden" onChange={handleManualUpload} />
+        <input ref={fieldNoteImageRef} type="file" accept="image/*" className="hidden" onChange={handleFieldNoteImageUpload} />
+      </div>
     </div>
   )
 }

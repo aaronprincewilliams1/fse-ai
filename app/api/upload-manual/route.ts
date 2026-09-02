@@ -18,25 +18,21 @@ export async function POST(req: NextRequest) {
 
     const bytes = await file.arrayBuffer()
     const buffer = Buffer.from(bytes)
-
     let content = ''
 
-    if (file.name.endsWith('.pdf')) {
-      const { extractText } = await import('unpdf')
-      const { text } = await extractText(new Uint8Array(buffer), { mergePages: true })
-      content = text
-    } else if (file.name.endsWith('.docx') || file.name.endsWith('.doc')) {
+    if (file.name.endsWith('.docx') || file.name.endsWith('.doc')) {
       const mammoth = require('mammoth')
       const result = await mammoth.extractRawText({ buffer })
-      content = result.value
+      content = result.value?.slice(0, 50000) || ''
     } else {
-      content = buffer.toString('utf-8')
+      content = buffer.toString('utf-8').slice(0, 50000)
     }
 
     await supabase.from('manuals').insert({
       instrument_name: instrumentName,
       file_name: file.name,
-      content: content.slice(0, 50000)
+      file_url: '',
+      content
     })
 
     return NextResponse.json({ success: true, results: [{ name: instrumentName, characters: content.length }] })
