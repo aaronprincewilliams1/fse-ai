@@ -41,6 +41,7 @@ export default function FSEAi() {
   const [noteImage, setNoteImage] = useState<File | null>(null)
   const [addingNote, setAddingNote] = useState(false)
   const [viewportHeight, setViewportHeight] = useState('100dvh')
+  const [isDragging, setIsDragging] = useState(false)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const fieldNoteImageRef = useRef<HTMLInputElement>(null)
@@ -69,6 +70,107 @@ export default function FSEAi() {
   async function loadRecentSites() {
     const { data } = await supabase.from('sites').select('*').order('created_at', { ascending: false }).limit(4)
     if (data) setRecentSites(data)
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setIsDragging(false)
+    const files = Array.from(e.dataTransfer.files)
+    if (!files.length) return
+    const manualFiles = files.filter(f =>
+      f.name.endsWith('.pdf') || f.name.endsWith('.docx') || f.name.endsWith('.doc') || f.name.endsWith('.txt')
+    )
+    const imageFiles = files.filter(f => f.type.startsWith('image/'))
+    if (manualFiles.length > 0) {
+      const fakeEvent = { target: { files: manualFiles, value: '' }, preventDefault: () => {} } as any
+      Object.defineProperty(fakeEvent.target, 'files', { value: manualFiles })
+      handleManualUploadFiles(manualFiles)
+    } else if (imageFiles.length > 0) {
+      handleImageFile(imageFiles[0])
+    }
+  }
+
+  async function handleManualUploadFiles(files: File[]) {
+    if (!files.length) return
+    setStarted(true)
+    setLoading(true)
+    const instrumentName = files.length === 1
+      ? window.prompt('What instrument is this manual for?', files[0].name.replace(/\.[^.]+$/, '')) || ''
+      : window.prompt(`Uploading ${files.length} files. What instrument are these manuals for?`) || ''
+    if (!instrumentName) { setLoading(false); return }
+    try {
+      const results = []
+      for (const file of files) {
+        const name = files.length === 1 ? instrumentName : `${instrumentName} - ${file.name.replace(/\.[^.]+$/, '')}`
+        if (file.name.endsWith('.pdf')) {
+          setMessages(prev => [...prev, { role: 'assistant', content: `⏳ Uploading ${file.name}...` }])
+          const fileName = `${Date.now()}-${file.name}`
+          const { error: storageError } = await supabase.storage
+            .from('manuals')
+            .upload(fileName, file, { contentType: 'application/pdf' })
+          if (storageError) throw storageError
+          await supabase.from('manuals').insert({
+            instrument_name: name,
+            file_name: file.name,
+            file_url: fileName,
+            content: ''
+          })
+          results.push({ name })
+        } else {
+          const formData = new FormData()
+          formData.append('file', file)
+          formData.append('instrumentName', name)
+          const res = await fetch('/api/upload-manual', { method: 'POST', body: formData })
+          const data = await res.json()
+          if (data.success) results.push(...data.results)
+        }
+      }
+      const summary = results.map((r: any) => `• ${r.name}`).join('\n')
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `✅ ${results.length} manual${results.length > 1 ? 's' : ''} uploaded:\n${summary}\n\nI will read these PDFs visually when you ask about errors.`
+      }])
+    } catch (err) {
+      console.error(err)
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Error uploading manual. Please try again.' }])
+    }
+    setLoading(false)
+  }
+
+  async function handleImageFile(file: File) {
+    setStarted(true)
+    setLoading(true)
+    const reader = new FileReader()
+    reader.onload = async () => {
+      const base64 = (reader.result as string).split(',')[1]
+      const userMsg: Message = { role: 'user', content: '📷 Photo of error message sent' }
+      const updated = [...messages, userMsg]
+      setMessages(updated)
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: [
+              ...messages.map(m => ({ role: m.role, content: m.content })),
+              {
+                role: 'user',
+                content: [
+                  { type: 'image', source: { type: 'base64', media_type: file.type, data: base64 } },
+                  { type: 'text', text: 'This is a photo of an error on a medical instrument. What does this error mean? Check the manuals and case history for troubleshooting steps and past resolutions.' }
+                ]
+              }
+            ]
+          })
+        })
+        const data = await res.json()
+        setMessages([...updated, { role: 'assistant', content: data.reply, relatedNotes: data.relatedNotes || [] }])
+      } catch {
+        setMessages([...updated, { role: 'assistant', content: 'Error analyzing image.' }])
+      }
+      setLoading(false)
+    }
+    reader.readAsDataURL(file)
   }
 
   async function sendMessage(content: string) {
@@ -319,9 +421,20 @@ export default function FSEAi() {
 
   return (
     <div
-      className="bg-white flex flex-col max-w-xl mx-auto overflow-hidden"
+      className={`bg-white flex flex-col max-w-xl mx-auto overflow-hidden transition-all ${isDragging ? 'ring-2 ring-blue-400 ring-inset' : ''}`}
       style={{ height: viewportHeight }}
+      onDragOver={e => { e.preventDefault(); setIsDragging(true) }}
+      onDragLeave={() => setIsDragging(false)}
+      onDrop={handleDrop}
     >
+      {isDragging && (
+        <div className="absolute inset-0 bg-blue-50 bg-opacity-90 z-50 flex items-center justify-center pointer-events-none">
+          <div className="text-center">
+            <p className="text-2xl mb-2">📄</p>
+            <p className="text-blue-600 font-medium">Drop to upload</p>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="pt-6 pb-3 px-4 flex items-center justify-between shrink-0">
         <div>
@@ -501,6 +614,15 @@ export default function FSEAi() {
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input) }
+            }}
+            onPaste={e => {
+              const items = Array.from(e.clipboardData.items)
+              const imageItem = items.find(item => item.type.startsWith('image/'))
+              if (imageItem) {
+                e.preventDefault()
+                const file = imageItem.getAsFile()
+                if (file) handleImageFile(file)
+              }
             }}
             placeholder="Site name, error code, or ask anything..."
             className="flex-1 text-sm text-gray-800 placeholder-gray-300 resize-none focus:outline-none bg-transparent leading-snug"
