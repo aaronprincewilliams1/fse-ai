@@ -152,9 +152,11 @@ RULES:
 - FIELD_NOTES_AVAILABLE tag goes at END of response.
 - Never load more than 1 PDF at a time to control costs.
 - Format phone numbers as tap-to-call when showing contacts.
-- When you find a relevant figure, diagram, or image in a PDF always include PAGE_IMAGE:[page_number] at the end of your response so it can be displayed. Example: PAGE_IMAGE:47
-- Always specify the exact page number where a figure or diagram is located.
-- When describing a procedure that has diagrams, always reference the page and include PAGE_IMAGE tag.`
+- Give numbered step by step instructions immediately without asking clarifying questions first.
+- When you find relevant figures or diagrams in a PDF include PAGE_IMAGE:[page_number] tags — one per page.
+- Never ask multiple questions — just give the information and ask one follow up at most.
+- Never use emoji in responses.
+- Be direct and practical. Aaron is on site and needs information fast.`
 
   let apiMessages = messages.map((m: any) => ({ role: m.role, content: m.content }))
 

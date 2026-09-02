@@ -224,20 +224,24 @@ export default function FSEAi() {
       setMessages(newMessages)
       if (data.actions?.some((a: any) => a.type === 'SITE_CREATED')) loadRecentSites()
 
-      // Fetch page image if referenced
-      if (data.pageNumber && data.manualFileUrl) {
-        try {
-          const imgRes = await fetch('/api/pdf-page', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ fileUrl: data.manualFileUrl, pageNumber: data.pageNumber })
-          })
-          const imgData = await imgRes.json()
-          if (imgData.image) {
-            setPageImages(prev => ({ ...prev, [newMessages.length - 1]: imgData.image }))
+      // Fetch page images if referenced
+      if (data.pageNumbers && data.pageNumbers.length > 0 && data.manualFileUrl) {
+        const images: string[] = []
+        for (const pageNum of data.pageNumbers.slice(0, 3)) {
+          try {
+            const imgRes = await fetch('/api/pdf-page', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ fileUrl: data.manualFileUrl, pageNumber: pageNum })
+            })
+            const imgData = await imgRes.json()
+            if (imgData.image) images.push(imgData.image)
+          } catch (e) {
+            console.error('Page image error:', e)
           }
-        } catch (e) {
-          console.error('Page image error:', e)
+        }
+        if (images.length > 0) {
+          setPageImages(prev => ({ ...prev, [newMessages.length - 1]: images.join(',') }))
         }
       }
     } catch {
@@ -641,13 +645,16 @@ export default function FSEAi() {
                   </div>
                 )}
                 {pageImages[i] && (
-                  <div className="mt-2 max-w-xs lg:max-w-sm">
-                    <p className="text-xs text-gray-400 mb-1">📄 Manual page</p>
-                    <img
-                      src={`data:image/png;base64,${pageImages[i]}`}
-                      alt="Manual page"
-                      className="rounded-xl border border-gray-200 w-full"
-                    />
+                  <div className="mt-2 max-w-xs lg:max-w-sm space-y-2">
+                    <p className="text-xs text-gray-400">📄 From the manual</p>
+                    {pageImages[i].split(',').map((img, idx) => (
+                      <img
+                        key={idx}
+                        src={`data:image/png;base64,${img}`}
+                        alt={`Manual page ${idx + 1}`}
+                        className="rounded-xl border border-gray-200 w-full"
+                      />
+                    ))}
                   </div>
                 )}
                 {m.role === 'assistant' && m.relatedNotes && m.relatedNotes.length > 0 && (
