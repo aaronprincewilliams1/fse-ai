@@ -29,6 +29,7 @@ interface FieldNote {
 
 export default function FSEAi() {
   const [messages, setMessages] = useState<Message[]>([])
+  const [messagesLoading, setMessagesLoading] = useState(true)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [listening, setListening] = useState(false)
@@ -70,6 +71,25 @@ export default function FSEAi() {
   async function loadRecentSites() {
     const { data } = await supabase.from('sites').select('*').order('created_at', { ascending: false }).limit(4)
     if (data) setRecentSites(data)
+  }
+
+  async function loadMessages() {
+    const { data } = await supabase.from('conversations').select('*').order('created_at', { ascending: true }).limit(100)
+    if (data && data.length > 0) {
+      setMessages(data.map((m: any) => ({ role: m.role, content: m.content })))
+      setStarted(true)
+    }
+    setMessagesLoading(false)
+  }
+
+  async function saveMessage(msg: Message) {
+    await supabase.from('conversations').insert({ role: msg.role, content: msg.content })
+  }
+
+  async function clearMessages() {
+    await supabase.from('conversations').delete().neq('id', '00000000-0000-0000-0000-000000000000')
+    setMessages([])
+    setStarted(false)
   }
 
   function handleDrop(e: React.DragEvent) {
@@ -183,6 +203,7 @@ export default function FSEAi() {
     setMessages(updated)
 
     try {
+      await saveMessage(userMsg)
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -191,11 +212,13 @@ export default function FSEAi() {
         })
       })
       const data = await res.json()
-      setMessages([...updated, {
+      const assistantMsg: Message = {
         role: 'assistant',
         content: data.reply,
         relatedNotes: data.relatedNotes || []
-      }])
+      }
+      await saveMessage({ role: 'assistant', content: data.reply })
+      setMessages([...updated, assistantMsg])
       if (data.actions?.some((a: any) => a.type === 'SITE_CREATED')) loadRecentSites()
     } catch {
       setMessages([...updated, { role: 'assistant', content: 'Connection error. Please try again.' }])
@@ -415,8 +438,7 @@ export default function FSEAi() {
   }
 
   function clearChat() {
-    setMessages([])
-    setStarted(false)
+    clearMessages()
   }
 
   return (
@@ -549,7 +571,7 @@ export default function FSEAi() {
         {started && (
           <div className="space-y-4 py-2">
             <div className="flex justify-end">
-              <button onClick={clearChat} className="text-xs text-gray-400 hover:text-gray-600">Clear chat</button>
+              <button onClick={clearChat} className="text-xs text-red-400 hover:text-red-600">Clear chat</button>
             </div>
             {messages.map((m, i) => (
               <div key={i} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
