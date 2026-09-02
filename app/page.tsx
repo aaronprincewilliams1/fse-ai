@@ -30,6 +30,7 @@ interface FieldNote {
 export default function FSEAi() {
   const [messages, setMessages] = useState<Message[]>([])
   const [messagesLoading, setMessagesLoading] = useState(true)
+  const [speaking, setSpeaking] = useState(false)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [listening, setListening] = useState(false)
@@ -441,6 +442,36 @@ export default function FSEAi() {
     clearMessages()
   }
 
+  function speakText(text: string) {
+    if (!window.speechSynthesis) return
+    window.speechSynthesis.cancel()
+    if (speaking) { setSpeaking(false); return }
+    const clean = text.replace(/ACTION:[^
+]*/g, '').replace(/[#*]/g, '').trim()
+    const utterance = new SpeechSynthesisUtterance(clean)
+    utterance.rate = 0.95
+    utterance.pitch = 1
+    utterance.onend = () => setSpeaking(false)
+    utterance.onerror = () => setSpeaking(false)
+    window.speechSynthesis.speak(utterance)
+    setSpeaking(true)
+  }
+
+  function renderMessageContent(text: string) {
+    const appleMapRegex = /https://maps.apple.com/?q=[^s]*/g
+    const googleMapRegex = /https://maps.google.com/?q=[^s]*/g
+    const parts = text.split(/(https://maps.[^s]*)/g)
+    return parts.map((part, i) => {
+      if (part.match(/https://maps.apple.com/)) {
+        return <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-0.5 rounded-lg text-xs font-medium">📍 Apple Maps</a>
+      }
+      if (part.match(/https://maps.google.com/)) {
+        return <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 bg-green-100 text-green-700 px-2 py-0.5 rounded-lg text-xs font-medium">🗺️ Google Maps</a>
+      }
+      return <span key={i}>{part}</span>
+    })
+  }
+
   return (
     <div
       className={`bg-white flex flex-col max-w-xl mx-auto overflow-hidden transition-all ${isDragging ? 'ring-2 ring-blue-400 ring-inset' : ''}`}
@@ -580,8 +611,16 @@ export default function FSEAi() {
                     ? 'bg-blue-600 text-white rounded-br-md'
                     : 'bg-gray-100 text-gray-800 rounded-bl-md'
                 }`}>
-                  {m.content}
+                  {m.role === 'assistant' ? renderMessageContent(m.content) : m.content}
                 </div>
+                {m.role === 'assistant' && (
+                  <button
+                    onClick={() => speakText(m.content)}
+                    className="mt-1 flex items-center gap-1 text-xs text-gray-400 hover:text-blue-500 transition-colors"
+                  >
+                    {speaking ? '⏹ Stop' : '🔊 Listen'}
+                  </button>
+                )}
                 {m.role === 'assistant' && m.relatedNotes && m.relatedNotes.length > 0 && (
                   <div className="mt-2 w-full max-w-xs lg:max-w-sm">
                     <button
