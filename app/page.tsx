@@ -457,16 +457,16 @@ export default function FSEAi() {
   }
 
   function renderMessageContent(text: string) {
-    const parts = text.split(/(https://maps.[^s]*)/g)
-    return parts.map((part, i) => {
-      if (part.includes('maps.apple.com')) {
+    const tokens = text.split(/(https://maps\.apple\.com[^\s]*|https://maps\.google\.com[^\s]*)/g)
+    return <>{tokens.map((part, i) => {
+      if (part.startsWith('https://maps.apple.com')) {
         return <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-0.5 rounded-lg text-xs font-medium">📍 Apple Maps</a>
       }
-      if (part.includes('maps.google.com')) {
+      if (part.startsWith('https://maps.google.com')) {
         return <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 bg-green-100 text-green-700 px-2 py-0.5 rounded-lg text-xs font-medium">🗺️ Google Maps</a>
       }
-      return <span key={i}>{part}</span>
-    })
+      return <span key={i} className="whitespace-pre-wrap">{part}</span>
+    })}</>
   }
 
   return (
