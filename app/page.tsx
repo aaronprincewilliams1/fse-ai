@@ -31,6 +31,7 @@ export default function FSEAi() {
   const [messages, setMessages] = useState<Message[]>([])
   const [messagesLoading, setMessagesLoading] = useState(true)
   const [speaking, setSpeaking] = useState(false)
+  const [pageImages, setPageImages] = useState<{[key: number]: string}>({})
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [listening, setListening] = useState(false)
@@ -219,8 +220,26 @@ export default function FSEAi() {
         relatedNotes: data.relatedNotes || []
       }
       await saveMessage({ role: 'assistant', content: data.reply })
-      setMessages([...updated, assistantMsg])
+      const newMessages = [...updated, assistantMsg]
+      setMessages(newMessages)
       if (data.actions?.some((a: any) => a.type === 'SITE_CREATED')) loadRecentSites()
+
+      // Fetch page image if referenced
+      if (data.pageNumber && data.manualFileUrl) {
+        try {
+          const imgRes = await fetch('/api/pdf-page', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fileUrl: data.manualFileUrl, pageNumber: data.pageNumber })
+          })
+          const imgData = await imgRes.json()
+          if (imgData.image) {
+            setPageImages(prev => ({ ...prev, [newMessages.length - 1]: imgData.image }))
+          }
+        } catch (e) {
+          console.error('Page image error:', e)
+        }
+      }
     } catch {
       setMessages([...updated, { role: 'assistant', content: 'Connection error. Please try again.' }])
     }
@@ -612,12 +631,24 @@ export default function FSEAi() {
                   {m.role === 'assistant' ? renderMessageContent(m.content) : m.content}
                 </div>
                 {m.role === 'assistant' && (
-                  <button
-                    onClick={() => speakText(m.content)}
-                    className="mt-1 flex items-center gap-1 text-xs text-gray-400 hover:text-blue-500 transition-colors"
-                  >
-                    {speaking ? '⏹ Stop' : '🔊 Listen'}
-                  </button>
+                  <div className="mt-1 flex items-center gap-2">
+                    <button
+                      onClick={() => speakText(m.content)}
+                      className="flex items-center gap-1 text-xs text-gray-400 hover:text-blue-500 transition-colors"
+                    >
+                      {speaking ? '⏹ Stop' : '🔊 Listen'}
+                    </button>
+                  </div>
+                )}
+                {pageImages[i] && (
+                  <div className="mt-2 max-w-xs lg:max-w-sm">
+                    <p className="text-xs text-gray-400 mb-1">📄 Manual page</p>
+                    <img
+                      src={`data:image/png;base64,${pageImages[i]}`}
+                      alt="Manual page"
+                      className="rounded-xl border border-gray-200 w-full"
+                    />
+                  </div>
                 )}
                 {m.role === 'assistant' && m.relatedNotes && m.relatedNotes.length > 0 && (
                   <div className="mt-2 w-full max-w-xs lg:max-w-sm">

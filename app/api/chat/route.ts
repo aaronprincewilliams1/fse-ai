@@ -151,7 +151,10 @@ RULES:
 - Put ACTION tags at END of response on their own line.
 - FIELD_NOTES_AVAILABLE tag goes at END of response.
 - Never load more than 1 PDF at a time to control costs.
-- Format phone numbers as tap-to-call when showing contacts.`
+- Format phone numbers as tap-to-call when showing contacts.
+- When you find a relevant figure, diagram, or image in a PDF always include PAGE_IMAGE:[page_number] at the end of your response so it can be displayed. Example: PAGE_IMAGE:47
+- Always specify the exact page number where a figure or diagram is located.
+- When describing a procedure that has diagrams, always reference the page and include PAGE_IMAGE tag.`
 
   let apiMessages = messages.map((m: any) => ({ role: m.role, content: m.content }))
 
