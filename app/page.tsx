@@ -446,8 +446,7 @@ export default function FSEAi() {
     if (!window.speechSynthesis) return
     window.speechSynthesis.cancel()
     if (speaking) { setSpeaking(false); return }
-    const clean = text.replace(/ACTION:[^
-]*/g, '').replace(/[#*]/g, '').trim()
+    const clean = text.replace(/\bACTION:\S+/g, '').replace(/[#*]/g, '').trim()
     const utterance = new SpeechSynthesisUtterance(clean)
     utterance.rate = 0.95
     utterance.pitch = 1
