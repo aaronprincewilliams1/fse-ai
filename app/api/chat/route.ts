@@ -152,16 +152,20 @@ RULES:
 - FIELD_NOTES_AVAILABLE tag goes at END of response.
 - Never load more than 1 PDF at a time to control costs.
 - Format phone numbers as tap-to-call when showing contacts.
-- Give numbered step by step instructions immediately without asking clarifying questions first.
-- When you find relevant figures or diagrams in a PDF include PAGE_IMAGE:[page_number] tags — one per page.
-- Never ask multiple questions — just give the information and ask one follow up at most.
+- The PDF manual is ALREADY ATTACHED to this message. Read it immediately and answer directly.
+- Never output LOAD_PDF or any other tags — the manual is already here.
+- Give numbered step by step instructions immediately. Do not ask clarifying questions first.
+- When you see relevant figures or diagrams in the attached PDF include PAGE_IMAGE:[page_number] for each relevant page.
+- Never ask multiple questions — give the information first, one follow up question at most.
 - Never use emoji in responses.
-- Be direct and practical. Aaron is on site and needs information fast.`
+- Be direct and practical. Aaron is on site and needs information fast.
+- If asked for steps to a procedure, give ALL the steps immediately from the manual.`
 
   let apiMessages = messages.map((m: any) => ({ role: m.role, content: m.content }))
 
-  // Only attach PDF if troubleshooting AND we found a relevant manual with a stored PDF
-  if (isTroubleshooting && relevantManual?.file_url) {
+  // Attach PDF whenever we have one and the user is asking about procedures or troubleshooting
+  const needsManual = isTroubleshooting || /how|steps|procedure|replace|install|calibrat|clean|reset|manual|service/i.test(lastContent)
+  if (needsManual && relevantManual?.file_url) {
     try {
       const { data } = await supabase.storage.from('manuals').download(relevantManual.file_url)
       if (data) {
