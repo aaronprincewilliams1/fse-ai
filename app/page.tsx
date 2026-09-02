@@ -457,16 +457,14 @@ export default function FSEAi() {
   }
 
   function renderMessageContent(text: string) {
-    const urlPattern = 'https://maps.';
     const lines = text.split('\n');
     return <>{lines.map((line, i) => {
-      if (line.includes('maps.apple.com')) {
-        const url = line.match(/https://[^s]*/)?.[0] || '';
-        return <div key={i}><a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-0.5 rounded-lg text-xs font-medium">📍 Apple Maps</a></div>
+      const trimmed = line.trim();
+      if (trimmed.startsWith('https://maps.apple.com')) {
+        return <div key={i}><a href={trimmed} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-0.5 rounded-lg text-xs font-medium">📍 Apple Maps</a></div>
       }
-      if (line.includes('maps.google.com')) {
-        const url = line.match(/https://[^s]*/)?.[0] || '';
-        return <div key={i}><a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 bg-green-100 text-green-700 px-2 py-0.5 rounded-lg text-xs font-medium">🗺️ Google Maps</a></div>
+      if (trimmed.startsWith('https://maps.google.com')) {
+        return <div key={i}><a href={trimmed} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 bg-green-100 text-green-700 px-2 py-0.5 rounded-lg text-xs font-medium">🗺️ Google Maps</a></div>
       }
       return <span key={i} style={{display:'block'}}>{line}</span>
     })}</>
